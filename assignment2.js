@@ -8,6 +8,12 @@ var vertexCount = 0;
 var uniformModelViewLoc = null;
 var uniformProjectionLoc = null;
 var heightmapData = null;
+let rotationY = 0, rotationZ = 0;
+let scale = 1.0;
+let height = [1, 1, 1];
+let eye = [0, 5, 5];
+let target = [0, 0, 0];
+const DEG_RAD = Math.PI / 180.0;
 
 function processImage(img)
 {
@@ -49,10 +55,70 @@ function processImage(img)
 	return {
 		data: heightArray,
 		width: sw,
-		height: sw
+		height: sh
 	};
 }
 
+function buildTriangleMesh(heightmapData) {
+  const W = heightmapData.width;
+  const H = heightmapData.height;
+  const D = heightmapData.data;
+
+  // world coordinates will be in [-halfSpan,+halfSpan]
+  const halfSpan = 2.0; 
+  // size of each cell
+  const cellSizeX = (2 * halfSpan) / (W - 1);
+  const cellSizeZ = (2 * halfSpan) / (H - 1);
+  // offsets to center the mesh at the origin
+  const ox = (W - 1) * 0.5 * cellSizeX;
+  const oz = (H - 1) * 0.5 * cellSizeZ;
+
+  // bounding box of the mesh
+  const xmin = -halfSpan, xmax = halfSpan;
+  const zmin = -halfSpan, zmax = halfSpan;
+  const ymin = 0, ymax = 1.0;
+
+  // for color normalization
+  const invX = 1.0 / (xmax - xmin || 1);
+  const invY = 1.0 / (ymax - ymin || 1);
+  const invZ = 1.0 / (zmax - zmin || 1);
+
+  const positions = [];
+  const colors = [];
+  const idx = (r,c) => r * W + c;
+
+  function emit(x,y,z) {
+    positions.push(x,y,z);
+    // normalize XYZ → RGB
+    const xc = (x - xmin) * invX;
+    const yc = (y - ymin) * invY;
+    const zc = (z - zmin) * invZ;
+    colors.push(xc, yc, zc, 1.0); // RGBA
+  }
+
+  for (let r = 0; r < H-1; r++) {
+    for (let c = 0; c < W-1; c++) {
+      const i00 = idx(r,c), i10 = idx(r,c+1);
+      const i01 = idx(r+1,c), i11 = idx(r+1,c+1);
+
+	  // corner positions
+      const x00 = c*cellSizeX - ox, z00 = r*cellSizeZ - oz, y00 = D[i00];
+      const x10 = (c+1)*cellSizeX - ox, z10 = z00, y10 = D[i10];
+      const x01 = x00, z01 = (r+1)*cellSizeZ - oz, y01 = D[i01];
+      const x11 = x10, z11 = z01, y11 = D[i11];
+
+      // 2 triangles per quad
+      emit(x00,y00,z00); emit(x01,y01,z01); emit(x10,y10,z10);
+      emit(x10,y10,z10); emit(x01,y01,z01); emit(x11,y11,z11);
+    }
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    colors:    new Float32Array(colors),
+    vertexCount: positions.length / 3
+  };
+}
 
 window.loadImageFile = function(event)
 {
@@ -71,6 +137,7 @@ window.loadImageFile = function(event)
 			// heightmapData is globally defined
 			heightmapData = processImage(img);
 			
+			
 			/*
 				TODO: using the data in heightmapData, create a triangle mesh
 					heightmapData.data: array holding the actual data, note that 
@@ -79,6 +146,25 @@ window.loadImageFile = function(event)
 					heightmapData.width: width of map (number of columns)
 					heightmapData.height: height of the map (number of rows)
 			*/
+			const mesh = buildTriangleMesh(heightmapData);
+			vertexCount = mesh.vertexCount;
+
+			const posBuffer = createBuffer(gl, gl.ARRAY_BUFFER, mesh.positions);
+			const colorBuffer = createBuffer(gl, gl.ARRAY_BUFFER, mesh.colors);
+			const posAttribLoc = gl.getAttribLocation(program, "position");
+			const colorAttribLoc = gl.getAttribLocation(program, "color");
+			vao = createVAO(gl, 
+				// positions
+				posAttribLoc, posBuffer, 
+
+				// normals (unused in this assignments)
+				null, null, 
+
+				// colors (not needed--computed by shader)
+				colorAttribLoc, colorBuffer
+			);
+			requestAnimationFrame(draw);
+			
 			console.log('loaded image: ' + heightmapData.width + ' x ' + heightmapData.height);
 
 		};
@@ -93,8 +179,6 @@ window.loadImageFile = function(event)
 	};
 	reader.readAsDataURL(f);
 }
-
-
 function setupViewMatrix(eye, target)
 {
     var forward = normalize(subtract(target, eye));
@@ -107,30 +191,49 @@ function setupViewMatrix(eye, target)
     return view;
 
 }
+function panCamera(deltaX, deltaY) {
+	eye    = add(eye, [deltaX * 0.001, 0, deltaY * 0.001]);
+	target = add(target, [deltaX * 0.001, 0, deltaY * 0.001]);
+}
 function draw()
 {
-
 	var fovRadians = 70 * Math.PI / 180;
 	var aspectRatio = +gl.canvas.width / +gl.canvas.height;
 	var nearClip = 0.001;
 	var farClip = 20.0;
 
-	// perspective projection
-	var projectionMatrix = perspectiveMatrix(
-		fovRadians,
-		aspectRatio,
-		nearClip,
-		farClip,
-	);
+	var projectionMatrix;
+	if (document.querySelector("#projection").value == 'perspective')
+	{
+		// perspective projection
+		projectionMatrix= perspectiveMatrix(
+			fovRadians,
+			aspectRatio,
+			nearClip,
+			farClip,
+		);
+	}
+	else {
+		// orthographic projection 
+		projectionMatrix = orthographicMatrix(-5*aspectRatio, 5*aspectRatio, -5, 5, nearClip, farClip);
+	}
 
-	// eye and target
-	var eye = [0, 5, 5];
-	var target = [0, 0, 0];
+	// Set up transormation
+	// Rotation around Y axis
+	var value = parseInt(document.querySelector("#yrotation").value);
+	rotationY = rotateYMatrix(value * DEG_RAD);
+	// Rotation around Z axis
+	value = parseInt(document.querySelector("#zrotation").value);
+	rotationZ = rotateZMatrix(value * DEG_RAD);
+	// Set up scale
+	value = parseInt(document.querySelector("#scale").value);
+	scale = scaleMatrix(value, value, value);
+	// Change height of terrain
+	var newHeight = parseInt(document.getElementById("height").value);	
+	height = scaleMatrix(1, newHeight/100, 1);
 
-	var modelMatrix = identityMatrix();
-
-	// TODO: set up transformations to the model
-
+	var modelMatrix = multiplyArrayOfMatrices([height, scale, rotationY, rotationZ]);
+	
 	// setup viewing matrix
 	var eyeToTarget = subtract(target, eye);
 	var viewMatrix = setupViewMatrix(eye, target);
@@ -146,7 +249,7 @@ function draw()
 	gl.disable(gl.CULL_FACE);
 
 	gl.clearColor(0.2, 0.2, 0.2, 1);
-	gl.clear(gl.COLOR_BUFFER_BIT);
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
 	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 	gl.useProgram(program);
@@ -161,65 +264,6 @@ function draw()
 	gl.drawArrays(primitiveType, 0, vertexCount);
 
 	requestAnimationFrame(draw);
-
-}
-
-function createBox()
-{
-	function transformTriangle(triangle, matrix) {
-		var v1 = [triangle[0], triangle[1], triangle[2], 1];
-		var v2 = [triangle[3], triangle[4], triangle[5], 1];
-		var v3 = [triangle[6], triangle[7], triangle[8], 1];
-
-		var newV1 = multiplyMatrixVector(matrix, v1);
-		var newV2 = multiplyMatrixVector(matrix, v2);
-		var newV3 = multiplyMatrixVector(matrix, v3);
-
-		return [
-			newV1[0], newV1[1], newV1[2],
-			newV2[0], newV2[1], newV2[2],
-			newV3[0], newV3[1], newV3[2]
-		];
-	}
-
-	var box = [];
-
-	var triangle1 = [
-		-1, -1, +1,
-		-1, +1, +1,
-		+1, -1, +1,
-	];
-	box.push(...triangle1)
-
-	var triangle2 = [
-		+1, -1, +1,
-		-1, +1, +1,
-		+1, +1, +1
-	];
-	box.push(...triangle2);
-
-	// 3 rotations of the above face
-	for (var i=1; i<=3; i++) 
-	{
-		var yAngle = i* (90 * Math.PI / 180);
-		var yRotMat = rotateYMatrix(yAngle);
-
-		var newT1 = transformTriangle(triangle1, yRotMat);
-		var newT2 = transformTriangle(triangle2, yRotMat);
-
-		box.push(...newT1);
-		box.push(...newT2);
-	}
-
-	// a rotation to provide the base of the box
-	var xRotMat = rotateXMatrix(90 * Math.PI / 180);
-	box.push(...transformTriangle(triangle1, xRotMat));
-	box.push(...transformTriangle(triangle2, xRotMat));
-
-
-	return {
-		positions: box
-	};
 
 }
 
@@ -250,19 +294,19 @@ function addMouseCallback(canvas)
 		e.preventDefault(); // disables the default right-click menu
 	});
 
-
 	canvas.addEventListener("wheel", function(e)  {
 		e.preventDefault(); // prevents page scroll
 
-		if (e.deltaY < 0) 
-		{
-			console.log("Scrolled up");
-			// e.g., zoom in
+		const zoom = document.getElementById("scale");
+		if (e.deltaY < 0) {
+			// zoom in
+			zoom.stepUp();
 		} else {
-			console.log("Scrolled down");
-			// e.g., zoom out
+			// zoom out
+			zoom.stepDown();
 		}
-	});
+		scale = scaleMatrix(zoom.value, zoom.value, zoom.value);
+	}, { passive: false });
 
 	document.addEventListener("mousemove", function (e) {
 		if (!isDragging) return;
@@ -271,9 +315,21 @@ function addMouseCallback(canvas)
 
 		var deltaX = currentX - startX;
 		var deltaY = currentY - startY;
-		console.log('mouse drag by: ' + deltaX + ', ' + deltaY);
 
 		// implement dragging logic
+		if (leftMouse) {
+			// Rotation around Y and Z
+			rotationY = rotateYMatrix(Math.max(0, Math.min(360, deltaX)) * DEG_RAD);
+			rotationZ = rotateZMatrix(Math.max(0, Math.min(360, deltaY)) * DEG_RAD);
+			// update slider values
+			document.querySelector("#yrotation").value = deltaX;
+			document.querySelector("#zrotation").value = deltaY;
+			console.log('rotate: ' + deltaX + ', ' + deltaY);
+		} else {
+			// pan the image in the X-Z plane
+			panCamera(deltaX, deltaY);
+		}
+
 	});
 
 	document.addEventListener("mouseup", function () {
@@ -296,37 +352,13 @@ function initialize()
 	// add mouse callbacks
 	addMouseCallback(canvas);
 
-	var box = createBox();
-	vertexCount = box.positions.length / 3;		// vertexCount is global variable used by draw()
-	console.log(box);
-
-	// create buffers to put in box
-	var boxVertices = new Float32Array(box['positions']);
-	var posBuffer = createBuffer(gl, gl.ARRAY_BUFFER, boxVertices);
-
 	var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSrc);
 	var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSrc);
 	program = createProgram(gl, vertexShader, fragmentShader);
 
-	// attributes (per vertex)
-	var posAttribLoc = gl.getAttribLocation(program, "position");
-
 	// uniforms
 	uniformModelViewLoc = gl.getUniformLocation(program, 'modelview');
 	uniformProjectionLoc = gl.getUniformLocation(program, 'projection');
-
-	vao = createVAO(gl, 
-		// positions
-		posAttribLoc, posBuffer, 
-
-		// normals (unused in this assignments)
-		null, null, 
-
-		// colors (not needed--computed by shader)
-		null, null
-	);
-
-	window.requestAnimationFrame(draw);
 }
 
 window.onload = initialize();

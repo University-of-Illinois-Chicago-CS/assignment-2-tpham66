@@ -39,13 +39,19 @@
         <table>
             <tr>
                 <td>Y Rotation</td>
-                <td><input id="rotation" type="range" min="0" max="360" value="0">
+                <td><input id="yrotation" type="range" min="0" max="360">
+                </td>
+            </tr>
+
+            <tr>
+                <td>Z Rotation</td>
+                <td><input id="zrotation" type="range" min="0" max="360">
                 </td>
             </tr>
 
             <tr>
                 <td>Zoom</td>
-                <td><input value="0" id="scale" type="range" min="0" max="200" value="0">
+                <td><input id="scale" type="range" min="0" max="100" step="0.01" >
                 </td>
             </tr>
 
@@ -57,8 +63,26 @@
             </tr>
 
             <tr>
+                <td>Projection type</td>
+                <td><select id="projection" name="projection_type">
+                    <option value="perspective">Perspective</option>
+                    <option value="orthographic">Orthographic</option>
+                    </select>
+                </td>
+            </tr>
+
+            <tr>
                 <td>Load image</td>
                 <td><input type="file" id="fileInput" onchange="loadImageFile(event)">
+                </td>
+            </tr>
+
+            <tr>
+                <td>Mode</td>
+                <td><select id="mode" name="mode">
+                    <option value="wireframe">Wireframe</option>
+                    <option value="solid">Solid</option>
+                    </select>
                 </td>
             </tr>
 
